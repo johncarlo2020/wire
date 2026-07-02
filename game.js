@@ -1,4 +1,23 @@
 const GAME_TIME_SECONDS = 20;
+const WIN_PROGRESS = 0.985;
+const END_TARGET_RADIUS_PX = 40;
+const BOWL_TARGET = { x: 0.64, y: 0.94 };
+const BOWL_TARGET_RADIUS_PX = 64;
+const WIN_PROGRESS_GRACE = 0.05;
+const BOWL_FINISH_ZONE = {
+  left: 0.46,
+  right: 0.86,
+  top: 0.84,
+  bottom: 1
+};
+const STAGE_COUNT = 5;
+const PHASE_PORTIONS = [0.2, 0.12, 0.2, 0.2, 0.28];
+const PHASE_THRESHOLDS = [];
+let phaseTotal = 0;
+for (const portion of PHASE_PORTIONS) {
+  phaseTotal += portion;
+  PHASE_THRESHOLDS.push(phaseTotal * WIN_PROGRESS);
+}
 
 const board = document.getElementById("board");
 const mapImg = document.getElementById("map");
@@ -7,26 +26,40 @@ const microLayer = document.getElementById("microLayer");
 const microCtx = microLayer.getContext("2d");
 const kibble = document.getElementById("kibble");
 const timerEl = document.getElementById("timer");
+const timerFillEl = document.getElementById("timerFill");
+const landingScreen = document.getElementById("landingScreen");
+const guideScreen = document.getElementById("guideScreen");
+const endScreen = document.getElementById("endScreen");
+const countdownOverlay = document.getElementById("countdownOverlay");
+const countdownText = document.getElementById("countdownText");
 const overlay = document.getElementById("overlay");
 const dialogTitle = document.getElementById("dialogTitle");
 const dialogText = document.getElementById("dialogText");
 const restartBtn = document.getElementById("restartBtn");
 const startTag = document.getElementById("startTag");
 const phaseToast = document.getElementById("phaseToast");
-const stageCards = [
-  document.getElementById("stageCard1"),
-  document.getElementById("stageCard2"),
-  document.getElementById("stageCard3"),
-  document.getElementById("stageCard4"),
-  document.getElementById("stageCard5")
+const stageCardImages = [
+  document.getElementById("stageCardImg1"),
+  document.getElementById("stageCardImg2"),
+  document.getElementById("stageCardImg3"),
+  document.getElementById("stageCardImg4"),
+  document.getElementById("stageCardImg5")
+];
+
+const stageCardImageAssets = [
+  { empty: "assets/S1_2x/S1-Stage 1-Empty_2x.webp", fill: "assets/S1_2x/S1-Stage 1-Fill_2x.webp" },
+  { empty: "assets/S2_2x/S2-Stage 2-Empty_2x.webp", fill: "assets/S2_2x/S2-Stage 2-Fill_2x.webp" },
+  { empty: "assets/S3_2x/S3-Stage 3-Empty_2x.webp", fill: "assets/S3_2x/S3-Stage 3-Fill_2x.webp" },
+  { empty: "assets/S4_2x/S4-Stage 4-Empty_2x.webp", fill: "assets/S4_2x/S4-Stage 4-Fill_2x.webp" },
+  { empty: "assets/S5_2x/S5-Stage 5-Empty_2x.webp", fill: "assets/S5_2x/S5-Stage 5-Fill_2x.webp" }
 ];
 
 const phases = [
-  { threshold: 0.18, label: "Stage 1 - Prebiotic Fibre", color: "#71d860", shown: false },
-  { threshold: 0.36, label: "Stage 2 - Good Bacteria", color: "#66c6e6", shown: false },
-  { threshold: 0.54, label: "Stage 3 - Producing SCFAs", color: "#f3bc3d", shown: false },
-  { threshold: 0.73, label: "Stage 4 - Improved Gut Wall", color: "#b79af7", shown: false },
-  { threshold: 0.9, label: "Stage 5 - Better Digestion", color: "#f4856d", shown: false }
+  { threshold: PHASE_THRESHOLDS[0], label: "Stage 1 - Prebiotic Fibre", color: "#71d860", shown: false },
+  { threshold: PHASE_THRESHOLDS[1], label: "Stage 2 - Good Bacteria", color: "#66c6e6", shown: false },
+  { threshold: PHASE_THRESHOLDS[2], label: "Stage 3 - Producing SCFAs", color: "#f3bc3d", shown: false },
+  { threshold: PHASE_THRESHOLDS[3], label: "Stage 4 - Improved Gut Wall", color: "#b79af7", shown: false },
+  { threshold: PHASE_THRESHOLDS[4], label: "Stage 5 - Better Digestion", color: "#f4856d", shown: false }
 ];
 
 const stageMicroAssets = [
@@ -45,6 +78,23 @@ const allMicroAssets = stageMicroAssets.flatMap((assets, stageIndex) =>
 );
 
 const stagePreviewCounts = [11, 10, 9, 8, 8];
+
+const APP_PHASE = {
+  LANDING: "landing",
+  GUIDE: "guide",
+  GAME: "game",
+  END: "end"
+};
+const GAME_START_COUNTDOWN_SECONDS = 3;
+
+const phaseBgmAudio = new Audio("assets/audio/background sound (1).mp3");
+const mainGameBgmAudio = new Audio("assets/audio/background sound (2).mp3");
+phaseBgmAudio.loop = true;
+mainGameBgmAudio.loop = true;
+phaseBgmAudio.preload = "auto";
+mainGameBgmAudio.preload = "auto";
+phaseBgmAudio.volume = 0.55;
+mainGameBgmAudio.volume = 0.55;
 
 const trackPoints = [
   { x: 0.44, y: 0.14 },
@@ -77,6 +127,12 @@ const state = {
   playing: false,
   dragging: false,
   ended: false,
+  warningActive: false,
+  appPhase: APP_PHASE.LANDING,
+  controlsEnabled: false,
+  countdownIntervalId: 0,
+  audioUnlocked: false,
+  targetBgm: "phase",
   startedAt: 0,
   timerFrame: 0,
   secondsLeft: GAME_TIME_SECONDS,
@@ -86,6 +142,8 @@ const state = {
   progress: 0,
   totalTrackLength: 0,
   trackSegments: [],
+  totalProgressLength: 0,
+  progressSegments: [],
   mapWidth: 0,
   mapHeight: 0,
   safeMask: null,
@@ -102,6 +160,196 @@ const trailCtx = trailCanvas.getContext("2d");
 function formatTime(seconds) {
   const clamped = Math.max(0, Math.ceil(seconds));
   return `00:${String(clamped).padStart(2, "0")}`;
+}
+
+function updateTimerUI(secondsLeft) {
+  timerEl.textContent = formatTime(secondsLeft);
+  const ratio = Math.max(0, Math.min(1, 1 - (secondsLeft / GAME_TIME_SECONDS)));
+  timerFillEl.style.transform = `scaleX(${ratio})`;
+}
+
+function getCountdownAudioContext() {
+  if (!window.__countdownAudioContext) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) {
+      window.__countdownAudioContext = new Ctx();
+    }
+  }
+  return window.__countdownAudioContext || null;
+}
+
+function playCountdownCue(stepValue) {
+  const ctx = getCountdownAudioContext();
+  if (!ctx) return;
+  if (ctx.state === "suspended") {
+    ctx.resume().catch(() => {});
+  }
+
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  const now = ctx.currentTime;
+  const accent = stepValue <= 1;
+
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(accent ? 900 : 680, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.12, now + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + (accent ? 0.22 : 0.18));
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + (accent ? 0.24 : 0.2));
+}
+
+function playPhaseChangeCue(phaseIndex) {
+  const ctx = getCountdownAudioContext();
+  if (!ctx) return;
+  if (ctx.state === "suspended") {
+    ctx.resume().catch(() => {});
+  }
+
+  const now = ctx.currentTime;
+  const base = 520 + phaseIndex * 80;
+
+  const oscA = ctx.createOscillator();
+  const gainA = ctx.createGain();
+  oscA.type = "triangle";
+  oscA.frequency.setValueAtTime(base, now);
+  gainA.gain.setValueAtTime(0.0001, now);
+  gainA.gain.exponentialRampToValueAtTime(0.09, now + 0.015);
+  gainA.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+  oscA.connect(gainA);
+  gainA.connect(ctx.destination);
+  oscA.start(now);
+  oscA.stop(now + 0.13);
+
+  const oscB = ctx.createOscillator();
+  const gainB = ctx.createGain();
+  oscB.type = "sine";
+  oscB.frequency.setValueAtTime(base * 1.25, now + 0.08);
+  gainB.gain.setValueAtTime(0.0001, now + 0.08);
+  gainB.gain.exponentialRampToValueAtTime(0.08, now + 0.095);
+  gainB.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+  oscB.connect(gainB);
+  gainB.connect(ctx.destination);
+  oscB.start(now + 0.08);
+  oscB.stop(now + 0.21);
+}
+
+function applyBackgroundAudio() {
+  const activeAudio = state.targetBgm === "game" ? mainGameBgmAudio : phaseBgmAudio;
+  const inactiveAudio = state.targetBgm === "game" ? phaseBgmAudio : mainGameBgmAudio;
+
+  inactiveAudio.pause();
+
+  if (!state.audioUnlocked) {
+    return;
+  }
+
+  if (activeAudio.paused) {
+    activeAudio.currentTime = 0;
+    activeAudio.play().catch(() => {});
+  }
+}
+
+function setBackgroundAudio(mode) {
+  state.targetBgm = mode;
+  applyBackgroundAudio();
+}
+
+function unlockAudioIfNeeded() {
+  if (state.audioUnlocked) {
+    return;
+  }
+
+  state.audioUnlocked = true;
+  const ctx = getCountdownAudioContext();
+  if (ctx && ctx.state === "suspended") {
+    ctx.resume().catch(() => {});
+  }
+  applyBackgroundAudio();
+}
+
+function hidePhaseScreens() {
+  landingScreen.classList.add("hidden");
+  guideScreen.classList.add("hidden");
+  endScreen.classList.add("hidden");
+}
+
+function clearGameStartCountdown() {
+  if (state.countdownIntervalId) {
+    clearInterval(state.countdownIntervalId);
+    state.countdownIntervalId = 0;
+  }
+  countdownOverlay.classList.add("hidden");
+}
+
+function showLandingPhase() {
+  clearGameStartCountdown();
+  stopTimer();
+  state.playing = false;
+  state.dragging = false;
+  state.warningActive = false;
+  state.appPhase = APP_PHASE.LANDING;
+  state.controlsEnabled = false;
+  kibble.classList.remove("dragging");
+  overlay.classList.add("hidden");
+  hidePhaseScreens();
+  landingScreen.classList.remove("hidden");
+  setBackgroundAudio("phase");
+}
+
+function showGuidePhase() {
+  clearGameStartCountdown();
+  state.appPhase = APP_PHASE.GUIDE;
+  state.controlsEnabled = false;
+  overlay.classList.add("hidden");
+  hidePhaseScreens();
+  guideScreen.classList.remove("hidden");
+  setBackgroundAudio("phase");
+}
+
+function showEndPhase() {
+  clearGameStartCountdown();
+  state.appPhase = APP_PHASE.END;
+  state.controlsEnabled = false;
+  overlay.classList.add("hidden");
+  hidePhaseScreens();
+  endScreen.classList.remove("hidden");
+  setBackgroundAudio("phase");
+}
+
+function startGameStartCountdown() {
+  clearGameStartCountdown();
+  state.controlsEnabled = false;
+  setBackgroundAudio("phase");
+
+  let countdownValue = GAME_START_COUNTDOWN_SECONDS;
+  countdownText.textContent = String(countdownValue);
+  countdownOverlay.classList.remove("hidden");
+  playCountdownCue(countdownValue);
+
+  state.countdownIntervalId = setInterval(() => {
+    countdownValue -= 1;
+
+    if (countdownValue <= 0) {
+      playCountdownCue(0);
+      clearGameStartCountdown();
+      state.controlsEnabled = true;
+      beginPlay();
+      return;
+    }
+
+    countdownText.textContent = String(countdownValue);
+    playCountdownCue(countdownValue);
+  }, 1000);
+}
+
+function startGamePhaseFromGuide() {
+  hidePhaseScreens();
+  state.appPhase = APP_PHASE.GAME;
+  resetGame();
+  startGameStartCountdown();
 }
 
 function setPlayerPosition(ratioX, ratioY) {
@@ -256,6 +504,12 @@ function buildCenterPathPoints() {
       y: trueCenterMapY / (state.mapHeight - 1)
     });
   }
+
+  if (state.centerPathPoints.length >= 2) {
+    const progressMetrics = buildSegmentsFromPoints(state.centerPathPoints);
+    state.progressSegments = progressMetrics.segments;
+    state.totalProgressLength = progressMetrics.totalLength;
+  }
 }
 
 function drawCenterPath() {
@@ -363,17 +617,29 @@ function pointerToBoardRatio(event) {
   };
 }
 
-function buildTrackMetrics() {
-  state.trackSegments = [];
-  state.totalTrackLength = 0;
+function buildSegmentsFromPoints(points) {
+  const segments = [];
+  let totalLength = 0;
 
-  for (let i = 0; i < trackPoints.length - 1; i += 1) {
-    const a = trackPoints[i];
-    const b = trackPoints[i + 1];
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const a = points[i];
+    const b = points[i + 1];
     const length = Math.hypot(b.x - a.x, b.y - a.y);
-    state.trackSegments.push({ a, b, length, startDistance: state.totalTrackLength });
-    state.totalTrackLength += length;
+    segments.push({ a, b, length, startDistance: totalLength });
+    totalLength += length;
   }
+
+  return { segments, totalLength };
+}
+
+function buildTrackMetrics() {
+  const trackMetrics = buildSegmentsFromPoints(trackPoints);
+  state.trackSegments = trackMetrics.segments;
+  state.totalTrackLength = trackMetrics.totalLength;
+
+  // Fallback progress path until mask-derived centre points are computed.
+  state.progressSegments = trackMetrics.segments;
+  state.totalProgressLength = trackMetrics.totalLength;
 }
 
 function getPointAndTangentAtProgress(progress) {
@@ -445,7 +711,7 @@ function getCenterPointAndTangentAtProgress(progress) {
 
 function getStageProgressRange(stageIndex) {
   const start = stageIndex === 0 ? 0 : phases[stageIndex - 1].threshold;
-  const end = stageIndex < phases.length - 1 ? phases[stageIndex].threshold : 0.985;
+  const end = stageIndex < phases.length - 1 ? phases[stageIndex].threshold : WIN_PROGRESS;
   return { start, end };
 }
 
@@ -901,12 +1167,14 @@ function positionMicroDecorations() {
 }
 
 function closestPointProgress(point, boardWidth, boardHeight) {
+  const segments = state.progressSegments.length ? state.progressSegments : state.trackSegments;
+  const totalLength = state.totalProgressLength > 0 ? state.totalProgressLength : state.totalTrackLength;
   let bestDistance = Number.POSITIVE_INFINITY;
   let bestProgress = 0;
   let bestSegmentIndex = 0;
 
-  for (let index = 0; index < state.trackSegments.length; index += 1) {
-    const seg = state.trackSegments[index];
+  for (let index = 0; index < segments.length; index += 1) {
+    const seg = segments[index];
     const ax = seg.a.x * boardWidth;
     const ay = seg.a.y * boardHeight;
     const bx = seg.b.x * boardWidth;
@@ -926,7 +1194,7 @@ function closestPointProgress(point, boardWidth, boardHeight) {
     if (dist < bestDistance) {
       bestDistance = dist;
       const along = seg.startDistance + seg.length * t;
-      bestProgress = state.totalTrackLength > 0 ? along / state.totalTrackLength : 0;
+      bestProgress = totalLength > 0 ? along / totalLength : 0;
       bestSegmentIndex = index;
     }
   }
@@ -1108,13 +1376,13 @@ function isSafePosition(ratioX, ratioY) {
 }
 
 function getPhaseIndex(progress) {
-  let phaseIndex = 0;
+  const clamped = Math.max(0, Math.min(WIN_PROGRESS, progress));
   for (let i = 0; i < phases.length; i += 1) {
-    if (progress >= phases[i].threshold) {
-      phaseIndex = i;
+    if (clamped < phases[i].threshold) {
+      return i;
     }
   }
-  return phaseIndex;
+  return phases.length - 1;
 }
 
 function showPhaseToast(phaseIndex) {
@@ -1129,11 +1397,15 @@ function showPhaseToast(phaseIndex) {
 }
 
 function checkPhaseUnlock(progress) {
+  const activePhaseIndex = getPhaseIndex(progress);
   for (let i = 0; i < phases.length; i += 1) {
-    if (!phases[i].shown && progress >= phases[i].threshold) {
+    if (!phases[i].shown && i <= activePhaseIndex) {
       phases[i].shown = true;
-      stageCards[i].classList.remove("hidden");
-      showPhaseToast(i);
+      stageCardImages[i].src = stageCardImageAssets[i].fill;
+      if (i === activePhaseIndex) {
+        playPhaseChangeCue(i);
+        showPhaseToast(i);
+      }
     }
   }
 }
@@ -1154,7 +1426,7 @@ function runTimer() {
 
     const elapsed = (performance.now() - state.startedAt) / 1000;
     state.secondsLeft = GAME_TIME_SECONDS - elapsed;
-    timerEl.textContent = formatTime(state.secondsLeft);
+    updateTimerUI(state.secondsLeft);
 
     if (state.secondsLeft <= 0) {
       endGame(false, "Time up!", "You ran out of time.");
@@ -1171,7 +1443,7 @@ function resetPhases() {
   for (let i = 0; i < phases.length; i += 1) {
     const phase = phases[i];
     phase.shown = false;
-    stageCards[i].classList.add("hidden");
+    stageCardImages[i].src = stageCardImageAssets[i].empty;
   }
   phaseToast.classList.add("hidden");
 }
@@ -1180,24 +1452,80 @@ function endGame(won, title, message) {
   state.playing = false;
   state.dragging = false;
   state.ended = true;
+  state.warningActive = false;
+  state.controlsEnabled = false;
   kibble.classList.remove("dragging");
   stopTimer();
+
+  if (won) {
+    showEndPhase();
+    return;
+  }
 
   dialogTitle.textContent = won ? "You Win!" : title;
   dialogText.textContent = won
     ? `Completed with ${Math.max(0, Math.ceil(state.secondsLeft))}s left.`
     : message;
+  restartBtn.textContent = "Play Again";
 
   overlay.classList.remove("hidden");
 }
 
+function showBorderWarning() {
+  if (state.warningActive || state.ended) {
+    return;
+  }
+
+  state.warningActive = true;
+  state.dragging = false;
+  kibble.classList.remove("dragging");
+
+  dialogTitle.textContent = "Careful";
+  dialogText.textContent = "Follow the line, avoid touching the side wall, and continue the game.";
+  restartBtn.textContent = "Continue";
+  overlay.classList.remove("hidden");
+}
+
 function movePlayer(ratioX, ratioY) {
+  if (state.warningActive || state.ended || state.appPhase !== APP_PHASE.GAME) {
+    return;
+  }
+
   const clampedX = Math.max(0, Math.min(1, ratioX));
   const clampedY = Math.max(0, Math.min(1, ratioY));
+
+  // Let players win when they clearly reach the finish target, even if lane-edge
+  // sampling is noisy at the final corner.
+  const endPoint = trackPoints[trackPoints.length - 1];
+  const boardW = Math.max(1, board.clientWidth);
+  const boardH = Math.max(1, board.clientHeight);
+  const dx = (clampedX - endPoint.x) * boardW;
+  const dy = (clampedY - endPoint.y) * boardH;
+  const nearEndTarget = Math.hypot(dx, dy) <= END_TARGET_RADIUS_PX;
+  const bowlDx = (clampedX - BOWL_TARGET.x) * boardW;
+  const bowlDy = (clampedY - BOWL_TARGET.y) * boardH;
+  const insideBowlTarget = Math.hypot(bowlDx, bowlDy) <= BOWL_TARGET_RADIUS_PX;
+  const insideBowlFinishZone =
+    clampedX >= BOWL_FINISH_ZONE.left &&
+    clampedX <= BOWL_FINISH_ZONE.right &&
+    clampedY >= BOWL_FINISH_ZONE.top &&
+    clampedY <= BOWL_FINISH_ZONE.bottom;
+  const projected = closestPointProgress({ x: clampedX * boardW, y: clampedY * boardH }, boardW, boardH);
+  const nearFinishProgress = projected.progress >= (WIN_PROGRESS - WIN_PROGRESS_GRACE);
+
+  if (insideBowlTarget || insideBowlFinishZone || nearEndTarget || nearFinishProgress) {
+    setPlayerPosition(clampedX, clampedY);
+    state.progress = WIN_PROGRESS;
+    checkPhaseUnlock(state.progress);
+    revealMicroDecorations(state.progress);
+    endGame(true, "", "");
+    return;
+  }
+
   const status = isSafePosition(clampedX, clampedY);
 
   if (!status.safe) {
-    endGame(false, "Game Over", "You touched the border.");
+    showBorderWarning();
     return;
   }
 
@@ -1209,20 +1537,25 @@ function movePlayer(ratioX, ratioY) {
   revealMicroDecorations(state.progress);
   state.activePhaseIndex = getPhaseIndex(state.progress);
 
-  if (state.progress >= 0.985) {
+  if (state.progress >= WIN_PROGRESS) {
     endGame(true, "", "");
   }
 }
 
 function resetGame() {
+  clearGameStartCountdown();
+  hidePhaseScreens();
   overlay.classList.add("hidden");
   state.playing = false;
   state.dragging = false;
   state.ended = false;
+  state.warningActive = false;
+  state.controlsEnabled = false;
   state.secondsLeft = GAME_TIME_SECONDS;
   state.progress = 0;
   state.activePhaseIndex = 0;
-  timerEl.textContent = formatTime(state.secondsLeft);
+  restartBtn.textContent = "Play Again";
+  updateTimerUI(state.secondsLeft);
   resetPhases();
   setPlayerPosition(trackPoints[0].x, trackPoints[0].y);
   clearTrail();
@@ -1233,19 +1566,21 @@ function resetGame() {
 }
 
 function beginPlay() {
-  if (state.playing) {
+  if (state.playing || state.appPhase !== APP_PHASE.GAME || !state.controlsEnabled) {
     return;
   }
 
+  setBackgroundAudio("game");
   state.playing = true;
   state.ended = false;
   state.startedAt = performance.now();
+  checkPhaseUnlock(state.progress);
   startTag.classList.add("hidden");
   runTimer();
 }
 
 kibble.addEventListener("pointerdown", (event) => {
-  if (state.ended) {
+  if (state.ended || state.warningActive || state.appPhase !== APP_PHASE.GAME || !state.controlsEnabled) {
     return;
   }
 
@@ -1256,7 +1591,6 @@ kibble.addEventListener("pointerdown", (event) => {
   kibble.setPointerCapture(event.pointerId);
   state.dragging = true;
   kibble.classList.add("dragging");
-  beginPlay();
 });
 
 kibble.addEventListener("pointermove", (event) => {
@@ -1280,7 +1614,33 @@ function stopDragging(event) {
 kibble.addEventListener("pointerup", stopDragging);
 kibble.addEventListener("pointercancel", stopDragging);
 
-restartBtn.addEventListener("click", resetGame);
+restartBtn.addEventListener("click", () => {
+  unlockAudioIfNeeded();
+  if (state.warningActive && !state.ended) {
+    state.warningActive = false;
+    overlay.classList.add("hidden");
+    restartBtn.textContent = "Play Again";
+    return;
+  }
+  resetGame();
+});
+
+landingScreen.addEventListener("click", () => {
+  unlockAudioIfNeeded();
+  showGuidePhase();
+});
+guideScreen.addEventListener("click", () => {
+  unlockAudioIfNeeded();
+  startGamePhaseFromGuide();
+});
+endScreen.addEventListener("click", () => {
+  unlockAudioIfNeeded();
+  showLandingPhase();
+});
+
+kibble.addEventListener("pointerdown", () => {
+  unlockAudioIfNeeded();
+});
 
 window.addEventListener("resize", () => {
   resizeTrailCanvas();
@@ -1297,6 +1657,7 @@ mapImg.addEventListener("load", () => {
   buildTrackMetrics();
   buildCenterPathPoints();
   resetGame();
+  showLandingPhase();
 });
 
 buildTrackMetrics();
@@ -1308,4 +1669,5 @@ if (mapImg.complete) {
   buildTrackMetrics();
   buildCenterPathPoints();
   resetGame();
+  showLandingPhase();
 }

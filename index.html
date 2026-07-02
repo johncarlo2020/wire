@@ -11,7 +11,15 @@
     <header class="topbar">
       <div class="timer-wrap">
         <img src="assets/Time_2x.webp" alt="Timer bar" class="timer-bg">
-        <span id="timer">00:20</span>
+        <div class="timer-content">
+          <div class="timer-row">
+            <span class="timer-label">TIME | MASA</span>
+            <span id="timer">00:20</span>
+          </div>
+          <div class="timer-progress" aria-hidden="true">
+            <span id="timerFill" class="timer-fill"></span>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -23,28 +31,37 @@
         <img id="startTag" src="assets/Start Here_2x.webp" alt="Start here" class="start-tag">
         <img id="kibble" src="assets/Kibble_2x.webp" alt="Kibble" class="kibble" draggable="false">
 
-        <div id="stageCard1" class="hidden stage-card green">
-          <strong>Prebiotic Fibre</strong>
-          <span>Serat Prebiotik</span>
+        <div id="stageCard1" class="stage-card green">
+          <img id="stageCardImg1" class="stage-card-image" src="assets/S1_2x/S1-Stage 1-Empty_2x.webp" alt="Stage 1 status card">
         </div>
-        <div id="stageCard2" class="hidden stage-card blue">
-          <strong>Good Bacteria</strong>
-          <span>Bakteria Baik</span>
+        <div id="stageCard2" class="stage-card blue">
+          <img id="stageCardImg2" class="stage-card-image" src="assets/S2_2x/S2-Stage 2-Empty_2x.webp" alt="Stage 2 status card">
         </div>
-        <div id="stageCard3" class="hidden stage-card yellow">
-          <strong>Producing SCFAs</strong>
-          <span>Menghasilkan SCFA</span>
+        <div id="stageCard3" class="stage-card yellow">
+          <img id="stageCardImg3" class="stage-card-image" src="assets/S3_2x/S3-Stage 3-Empty_2x.webp" alt="Stage 3 status card">
         </div>
-        <div id="stageCard4" class="hidden stage-card violet">
-          <strong>Improved Gut Wall</strong>
-          <span>Penembokkan Tembok Usus</span>
+        <div id="stageCard4" class="stage-card violet">
+          <img id="stageCardImg4" class="stage-card-image" src="assets/S4_2x/S4-Stage 4-Empty_2x.webp" alt="Stage 4 status card">
         </div>
-        <div id="stageCard5" class="hidden stage-card red">
-          <strong>Better Digestion</strong>
-          <span>Pencernaan lebih baik</span>
+        <div id="stageCard5" class="stage-card red">
+          <img id="stageCardImg5" class="stage-card-image" src="assets/S5_2x/S5-Stage 5-Empty_2x.webp" alt="Stage 5 status card">
         </div>
 
         <div id="phaseToast" class="hidden phase-toast" role="status" aria-live="polite"></div>
+
+        <div id="landingScreen" class="phase-screen">
+          <img src="assets/landing.webp" alt="Landing screen">
+        </div>
+        <div id="guideScreen" class="hidden phase-screen">
+          <img src="assets/guide.webp" alt="Guide screen">
+        </div>
+        <div id="endScreen" class="hidden phase-screen">
+          <img src="assets/end.webp" alt="End screen">
+        </div>
+        <div id="countdownOverlay" class="hidden countdown-overlay" aria-live="polite">
+          <span class="countdown-label">Ready | Sedia</span>
+          <span id="countdownText">3</span>
+        </div>
 
         <div id="overlay" class="hidden overlay">
           <div class="dialog">
@@ -55,7 +72,6 @@
         </div>
       </div>
 
-      <p class="hint">Drag the kibble from START to the end. Touching the border ends the game.</p>
     </section>
   </main>
 
