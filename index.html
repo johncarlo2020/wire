@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Digital Buzz Wire Game</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="timer-wrap">
+        <img src="assets/Time_2x.webp" alt="Timer bar" class="timer-bg">
+        <span id="timer">00:20</span>
+      </div>
+    </header>
+
+    <section class="board-panel">
+      <div id="board" class="board" aria-label="Buzz wire board">
+        <img id="map" src="assets/map.webp" alt="Game map" class="map">
+        <canvas id="trail" class="trail" aria-hidden="true"></canvas>
+        <div id="microLayer" class="micro-layer" aria-hidden="true"></div>
+        <img id="startTag" src="assets/Start Here_2x.webp" alt="Start here" class="start-tag">
+        <img id="kibble" src="assets/Kibble_2x.webp" alt="Kibble" class="kibble" draggable="false">
+
+        <div id="stageCard1" class="stage-card green hidden">
+          <strong>Prebiotic Fibre</strong>
+          <span>Serat Prebiotik</span>
+        </div>
+        <div id="stageCard2" class="stage-card blue hidden">
+          <strong>Good Bacteria</strong>
+          <span>Bakteria Baik</span>
+        </div>
+        <div id="stageCard3" class="stage-card yellow hidden">
+          <strong>Producing SCFAs</strong>
+          <span>Menghasilkan SCFA</span>
+        </div>
+        <div id="stageCard4" class="stage-card violet hidden">
+          <strong>Improved Gut Wall</strong>
+          <span>Penembokkan Tembok Usus</span>
+        </div>
+        <div id="stageCard5" class="stage-card red hidden">
+          <strong>Better Digestion</strong>
+          <span>Pencernaan lebih baik</span>
+        </div>
+
+        <div id="phaseToast" class="phase-toast hidden" role="status" aria-live="polite"></div>
+
+        <div id="overlay" class="overlay hidden">
+          <div class="dialog">
+            <h2 id="dialogTitle">Game Over</h2>
+            <p id="dialogText">You touched the border.</p>
+            <button id="restartBtn" type="button">Play Again</button>
+          </div>
+        </div>
+      </div>
+
+      <p class="hint">Drag the kibble from START to the end. Touching the border ends the game.</p>
+    </section>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
