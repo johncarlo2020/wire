@@ -36,6 +36,9 @@ const stageMicroAssets = [
   ["assets/S5_2x/S5-Micro 1_2x.webp", "assets/S5_2x/S5-Micro 2_2x.webp", "assets/S5_2x/S5-Micro 3_2x.webp"]
 ];
 
+const MICRO_SPAWN_PER_SIDE = 1;
+const MICRO_SAFE_RADIUS_MULTIPLIER = 1.3;
+
 const allMicroAssets = stageMicroAssets.flatMap((assets, stageIndex) =>
   assets.map((src) => ({ src, stageIndex }))
 );
@@ -397,86 +400,82 @@ function spawnMicroDecoration(stageIndex) {
   }
 
   const spawnProgress = state.microNextSpawnProgress[stageIndex];
-  const sideSign = state.microDecorations.length % 2 === 0 ? -1 : 1;
   const { point, tangent } = getPointAndTangentAtProgress(spawnProgress);
-  const normal = { x: -tangent.y, y: tangent.x };
-  const normalLength = Math.hypot(normal.x, normal.y) || 1;
-  const nx = (normal.x / normalLength) * sideSign;
-  const ny = (normal.y / normalLength) * sideSign;
+  const tangentAngle = Math.atan2(tangent.y, tangent.x) * (180 / Math.PI);
+  const stageScale = [1.08, 1.02, 1.12, 1.08, 1.08];
+  const laneOffsets = [0.042, 0.028];
+  const isMostlyHorizontal = Math.abs(tangent.x) >= Math.abs(tangent.y);
+  const sideVectors = isMostlyHorizontal
+    ? [{ x: 0, y: -1 }, { x: 0, y: 1 }]
+    : [{ x: -1, y: 0 }, { x: 1, y: 0 }];
 
-  let x = point.x;
-  let y = point.y;
+  for (let sideIndex = 0; sideIndex < sideVectors.length; sideIndex += 1) {
+    const side = sideVectors[sideIndex];
+    const sideSign = sideIndex === 0 ? -1 : 1;
+    for (let bandIndex = 0; bandIndex < MICRO_SPAWN_PER_SIDE; bandIndex += 1) {
+      const nx = side.x;
+      const ny = side.y;
 
-  if (state.safeMask && state.mapWidth > 0 && state.mapHeight > 0) {
-    const centerX = Math.round(point.x * (state.mapWidth - 1));
-    const centerY = Math.round(point.y * (state.mapHeight - 1));
+      let safePosition = null;
+      const desiredOffset = laneOffsets[Math.min(bandIndex, laneOffsets.length - 1)];
+      const shrinkSteps = [1, 0.88, 0.76, 0.64, 0.52, 0.4, 0.28];
 
-    let maxSafe = 0;
-    const maxProbe = Math.max(24, Math.round(Math.min(state.mapWidth, state.mapHeight) * 0.06));
-
-    for (let d = 1; d <= maxProbe; d += 1) {
-      const sampleX = Math.round(centerX + nx * d);
-      const sampleY = Math.round(centerY + ny * d);
-      const safe = isMaskSafeAt(sampleX, sampleY);
-
-      if (safe !== true) {
-        break;
-      }
-
-      maxSafe = d;
-    }
-
-    const insetPx = maxSafe > 2 ? Math.max(1, Math.round(maxSafe * 0.72)) : 0;
-    let candidateX = Math.max(0, Math.min(state.mapWidth - 1, Math.round(centerX + nx * insetPx)));
-    let candidateY = Math.max(0, Math.min(state.mapHeight - 1, Math.round(centerY + ny * insetPx)));
-
-    if (!isMaskSafeAt(candidateX, candidateY)) {
-      for (let t = 0.9; t >= 0; t -= 0.1) {
-        const testX = Math.round(centerX + (candidateX - centerX) * t);
-        const testY = Math.round(centerY + (candidateY - centerY) * t);
-        if (isMaskSafeAt(testX, testY)) {
-          candidateX = testX;
-          candidateY = testY;
+      for (const shrink of shrinkSteps) {
+        const testX = Math.max(0, Math.min(1, point.x + nx * desiredOffset * shrink));
+        const testY = Math.max(0, Math.min(1, point.y + ny * desiredOffset * shrink));
+        if (evaluateSafetyAtPosition(testX, testY, MICRO_SAFE_RADIUS_MULTIPLIER).safe) {
+          safePosition = { x: testX, y: testY };
           break;
         }
       }
+
+      if (!safePosition) {
+        continue;
+      }
+
+      safePosition = ensureSafeMicroPosition(
+        safePosition.x,
+        safePosition.y,
+        point.x,
+        point.y,
+        MICRO_SAFE_RADIUS_MULTIPLIER
+      );
+
+      if (!safePosition) {
+        continue;
+      }
+
+      const assetIndex = state.microDecorations.length % assets.length;
+      const element = document.createElement("img");
+
+      element.src = assets[assetIndex];
+      element.alt = "";
+      element.className = "micro-item";
+
+      const rotation = tangentAngle + sideSign * (8 + bandIndex * 3);
+      const scaleWave = 0.94 + (state.microDecorations.length % 3) * 0.05;
+      const scale = (stageScale[stageIndex] || 1) * scaleWave;
+
+      const decoration = {
+        stageIndex,
+        x: safePosition.x,
+        y: safePosition.y,
+        anchorX: point.x,
+        anchorY: point.y,
+        safeRadiusMultiplier: MICRO_SAFE_RADIUS_MULTIPLIER,
+        rotation,
+        scale,
+        element
+      };
+
+      microLayer.appendChild(element);
+      state.microDecorations.push(decoration);
+
+      element.style.left = `${safePosition.x * 100}%`;
+      element.style.top = `${safePosition.y * 100}%`;
+      element.style.transform = `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale})`;
     }
-
-    x = candidateX / Math.max(1, state.mapWidth - 1);
-    y = candidateY / Math.max(1, state.mapHeight - 1);
-  } else {
-    x = Math.max(0, Math.min(1, point.x + nx * 0.035));
-    y = Math.max(0, Math.min(1, point.y + ny * 0.035));
   }
-
-  const assetIndex = state.microDecorations.length % assets.length;
-  const element = document.createElement("img");
-
-  element.src = assets[assetIndex];
-  element.alt = "";
-  element.className = "micro-item";
-
-  const tangentAngle = Math.atan2(tangent.y, tangent.x) * (180 / Math.PI);
-  const rotation = tangentAngle + sideSign * 8;
-  const stageScale = [1.08, 1.02, 1.12, 1.08, 1.08];
-  const scaleWave = 0.94 + (state.microDecorations.length % 3) * 0.05;
-  const scale = (stageScale[stageIndex] || 1) * scaleWave;
-
-  const decoration = {
-    stageIndex,
-    x,
-    y,
-    rotation,
-    scale,
-    element
-  };
-
-  microLayer.appendChild(element);
-  state.microDecorations.push(decoration);
-
-  element.style.left = `${x * 100}%`;
-  element.style.top = `${y * 100}%`;
-  element.style.transform = `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale})`;
 }
 
 function syncMicroSpawns(progress) {
@@ -501,6 +500,23 @@ function syncMicroSpawns(progress) {
   }
 }
 
+function ensureSafeMicroPosition(x, y, anchorX, anchorY, radiusMultiplier = MICRO_SAFE_RADIUS_MULTIPLIER) {
+  const direct = evaluateSafetyAtPosition(x, y, radiusMultiplier);
+  if (direct.safe) {
+    return { x, y };
+  }
+
+  for (let t = 0.9; t >= 0.2; t -= 0.1) {
+    const testX = anchorX + (x - anchorX) * t;
+    const testY = anchorY + (y - anchorY) * t;
+    if (evaluateSafetyAtPosition(testX, testY, radiusMultiplier).safe) {
+      return { x: testX, y: testY };
+    }
+  }
+
+  return null;
+}
+
 function positionMicroDecorations() {
   const edgePadding = 18 / Math.max(1, Math.min(board.clientWidth, board.clientHeight));
 
@@ -508,12 +524,29 @@ function positionMicroDecorations() {
     const padding = 0.5 / Math.max(1, Math.min(board.clientWidth, board.clientHeight));
     const clampedX = Math.max(padding, Math.min(1 - padding, decoration.x));
     const clampedY = Math.max(padding, Math.min(1 - padding, decoration.y));
+    const constrained = ensureSafeMicroPosition(
+      clampedX,
+      clampedY,
+      decoration.anchorX ?? clampedX,
+      decoration.anchorY ?? clampedY,
+      decoration.safeRadiusMultiplier ?? MICRO_SAFE_RADIUS_MULTIPLIER
+    );
 
-    decoration.element.style.left = `${clampedX * 100}%`;
-    decoration.element.style.top = `${clampedY * 100}%`;
+    if (!constrained) {
+      decoration.element.style.display = "none";
+      continue;
+    }
+
+    decoration.element.style.display = "block";
+
+    decoration.x = constrained.x;
+    decoration.y = constrained.y;
+
+    decoration.element.style.left = `${decoration.x * 100}%`;
+    decoration.element.style.top = `${decoration.y * 100}%`;
     decoration.element.style.transform = `translate(-50%, -50%) rotate(${decoration.rotation}deg) scale(${decoration.scale || 1})`;
 
-    if (clampedX < edgePadding || clampedX > 1 - edgePadding || clampedY < edgePadding || clampedY > 1 - edgePadding) {
+    if (decoration.x < edgePadding || decoration.x > 1 - edgePadding || decoration.y < edgePadding || decoration.y > 1 - edgePadding) {
       decoration.element.style.opacity = "0.85";
     } else {
       decoration.element.style.opacity = "1";
@@ -669,7 +702,7 @@ function isMaskSafeAt(mapX, mapY) {
   return state.safeMask[idx] === 1;
 }
 
-function isSafePosition(ratioX, ratioY) {
+function evaluateSafetyAtPosition(ratioX, ratioY, radiusMultiplier = 1) {
   const boardWidth = board.clientWidth;
   const boardHeight = board.clientHeight;
   const point = {
@@ -683,7 +716,7 @@ function isSafePosition(ratioX, ratioY) {
   const mapY = Math.round(ratioY * (state.mapHeight - 1));
   const kibbleRadiusMapPx = Math.max(
     2,
-    Math.round((kibble.clientWidth * 0.22 * state.mapWidth) / Math.max(1, boardWidth))
+    Math.round((kibble.clientWidth * 0.22 * state.mapWidth * radiusMultiplier) / Math.max(1, boardWidth))
   );
 
   const sampleOffsets = [
@@ -722,6 +755,10 @@ function isSafePosition(ratioX, ratioY) {
     progress: result.progress,
     segmentIndex: result.segmentIndex
   };
+}
+
+function isSafePosition(ratioX, ratioY) {
+  return evaluateSafetyAtPosition(ratioX, ratioY, 1);
 }
 
 function getPhaseIndex(progress) {
