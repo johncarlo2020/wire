@@ -4,6 +4,7 @@ const board = document.getElementById("board");
 const mapImg = document.getElementById("map");
 const trailCanvas = document.getElementById("trail");
 const microLayer = document.getElementById("microLayer");
+const microCtx = microLayer.getContext("2d");
 const kibble = document.getElementById("kibble");
 const timerEl = document.getElementById("timer");
 const overlay = document.getElementById("overlay");
@@ -92,7 +93,8 @@ const state = {
   activePhaseIndex: -1,
   dragOffset: { x: 0, y: 0 },
   microDecorations: [],
-  microNextSpawnProgress: stageMicroAssets.map(() => 0)
+  microNextSpawnProgress: stageMicroAssets.map(() => 0),
+  centerPathPoints: []
 };
 
 const trailCtx = trailCanvas.getContext("2d");
@@ -122,6 +124,197 @@ function clearTrail() {
   const height = trailCanvas.height;
   trailCtx.clearRect(0, 0, width, height);
   state.trailPoints = [];
+}
+
+function drawMaskDebug() {
+  const existing = document.getElementById("maskDebug");
+  if (existing) existing.remove();
+
+  if (!state.safeMask || !state.mapWidth || !state.mapHeight) return;
+
+  // Off-screen canvas at natural image resolution
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = state.mapWidth;
+  maskCanvas.height = state.mapHeight;
+  const maskCtx = maskCanvas.getContext("2d");
+  const imageData = maskCtx.createImageData(state.mapWidth, state.mapHeight);
+  const d = imageData.data;
+
+  for (let i = 0; i < state.safeMask.length; i++) {
+    const base = i * 4;
+    if (state.safeMask[i] === 1) {
+      d[base]     = 0;    // R
+      d[base + 1] = 210;  // G
+      d[base + 2] = 0;    // B
+      d[base + 3] = 140;  // A — semi-transparent green
+    }
+  }
+
+  maskCtx.putImageData(imageData, 0, 0);
+
+  // Also draw the computed centerline on top (red)
+  if (state.centerPathPoints.length >= 2) {
+    maskCtx.strokeStyle = "red";
+    maskCtx.lineWidth = 3;
+    maskCtx.lineCap = "round";
+    maskCtx.lineJoin = "round";
+    maskCtx.beginPath();
+    maskCtx.moveTo(
+      state.centerPathPoints[0].x * (state.mapWidth - 1),
+      state.centerPathPoints[0].y * (state.mapHeight - 1)
+    );
+    for (let i = 1; i < state.centerPathPoints.length; i++) {
+      maskCtx.lineTo(
+        state.centerPathPoints[i].x * (state.mapWidth - 1),
+        state.centerPathPoints[i].y * (state.mapHeight - 1)
+      );
+    }
+    maskCtx.stroke();
+  }
+
+  // Overlay canvas scaled to fill the board display area
+  const overlay = document.createElement("canvas");
+  overlay.id = "maskDebug";
+  overlay.style.position = "absolute";
+  overlay.style.inset = "0";
+  overlay.style.width = "100%";
+  overlay.style.height = "100%";
+  overlay.style.pointerEvents = "none";
+  overlay.style.zIndex = "999";
+
+  const rect = board.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  overlay.width = Math.round(rect.width * dpr);
+  overlay.height = Math.round(rect.height * dpr);
+
+  const overlayCtx = overlay.getContext("2d");
+  overlayCtx.scale(dpr, dpr);
+  overlayCtx.drawImage(maskCanvas, 0, 0, rect.width, rect.height);
+
+  board.appendChild(overlay);
+}
+
+function buildCenterPathPoints() {
+  state.centerPathPoints = [];
+
+  if (!state.safeMask || !state.mapWidth || !state.mapHeight || !state.trackSegments.length) {
+    return;
+  }
+
+  const sampleCount = 300;
+
+  for (let i = 0; i <= sampleCount; i++) {
+    const progress = i / sampleCount;
+    const { point, tangent } = getPointAndTangentAtProgress(progress);
+
+    // Normal direction perpendicular to the path
+    const nx = -tangent.y;
+    const ny = tangent.x;
+
+    const centerMapX = Math.round(point.x * (state.mapWidth - 1));
+    const centerMapY = Math.round(point.y * (state.mapHeight - 1));
+
+    // If the trackPoint itself is outside the mask, fall back to it as-is
+    if (isMaskSafeAt(centerMapX, centerMapY) !== true) {
+      state.centerPathPoints.push({ x: point.x, y: point.y });
+      continue;
+    }
+
+    const maxProbe = Math.round(Math.min(state.mapWidth, state.mapHeight) * 0.12);
+
+    // Find how far the lane extends in the +normal direction
+    let posExtent = 0;
+    for (let d = 1; d <= maxProbe; d++) {
+      const sx = Math.round(centerMapX + nx * d);
+      const sy = Math.round(centerMapY + ny * d);
+      if (isMaskSafeAt(sx, sy) === true) {
+        posExtent = d;
+      } else {
+        break;
+      }
+    }
+
+    // Find how far the lane extends in the -normal direction
+    let negExtent = 0;
+    for (let d = 1; d <= maxProbe; d++) {
+      const sx = Math.round(centerMapX - nx * d);
+      const sy = Math.round(centerMapY - ny * d);
+      if (isMaskSafeAt(sx, sy) === true) {
+        negExtent = d;
+      } else {
+        break;
+      }
+    }
+
+    // True centre is the midpoint of the lane cross-section
+    const midOffset = (posExtent - negExtent) / 2;
+    const trueCenterMapX = centerMapX + nx * midOffset;
+    const trueCenterMapY = centerMapY + ny * midOffset;
+
+    state.centerPathPoints.push({
+      x: trueCenterMapX / (state.mapWidth - 1),
+      y: trueCenterMapY / (state.mapHeight - 1)
+    });
+  }
+}
+
+function drawCenterPath() {
+  const rect = board.getBoundingClientRect();
+
+  // Use mask-derived centre points when available, fall back to trackPoints
+  const basePts = state.centerPathPoints.length >= 2 ? state.centerPathPoints : trackPoints;
+  if (basePts.length < 2) return;
+
+  const px = x => x * rect.width;
+  const py = y => y * rect.height;
+
+  // Extend visual start upward to cover the intestine opening above the player start
+  const pts = [{ x: basePts[0].x, y: 0.04 }, ...basePts];
+
+  // Fixed corner-rounding radius. The line stays on the exact centre for straight
+  // segments and only arcs a tiny amount at each bend — prevents the midpoint-bezier
+  // from cutting inside U-turns or making a rogue loop at the bottom.
+  const r = 0.025;
+
+  trailCtx.save();
+  trailCtx.lineCap = "round";
+  trailCtx.lineJoin = "round";
+  trailCtx.lineWidth = 5;
+  trailCtx.strokeStyle = "#000";
+  trailCtx.beginPath();
+  trailCtx.moveTo(px(pts[0].x), py(pts[0].y));
+
+  for (let i = 1; i < pts.length - 1; i++) {
+    const prev = pts[i - 1];
+    const curr = pts[i];
+    const next = pts[i + 1];
+
+    const d1x = curr.x - prev.x;
+    const d1y = curr.y - prev.y;
+    const len1 = Math.hypot(d1x, d1y) || 1;
+
+    const d2x = next.x - curr.x;
+    const d2y = next.y - curr.y;
+    const len2 = Math.hypot(d2x, d2y) || 1;
+
+    // Cap radius so it never exceeds half of either adjacent segment
+    const rad = Math.min(r, len1 / 2, len2 / 2);
+
+    // Point just before the corner along the incoming segment
+    const t1x = curr.x - (d1x / len1) * rad;
+    const t1y = curr.y - (d1y / len1) * rad;
+
+    // Point just after the corner along the outgoing segment
+    const t2x = curr.x + (d2x / len2) * rad;
+    const t2y = curr.y + (d2y / len2) * rad;
+
+    trailCtx.lineTo(px(t1x), py(t1y));
+    trailCtx.quadraticCurveTo(px(curr.x), py(curr.y), px(t2x), py(t2y));
+  }
+
+  trailCtx.lineTo(px(pts[pts.length - 1].x), py(pts[pts.length - 1].y));
+  trailCtx.stroke();
+  trailCtx.restore();
 }
 
 function drawTrail() {
@@ -226,6 +419,30 @@ function getPointAndTangentAtProgress(progress) {
   return { point: { x: last.b.x, y: last.b.y }, tangent };
 }
 
+// Returns the mask-derived visual centre point and tangent at the given progress.
+// Falls back to the trackPoints-based version if center points aren't built yet.
+function getCenterPointAndTangentAtProgress(progress) {
+  if (!state.centerPathPoints || state.centerPathPoints.length < 2) {
+    return getPointAndTangentAtProgress(progress);
+  }
+
+  const clamped = Math.max(0, Math.min(1, progress));
+  const lastIdx = state.centerPathPoints.length - 1;
+  const idx = Math.round(clamped * lastIdx);
+  const point = state.centerPathPoints[idx];
+
+  // Tangent from neighbouring sampled points
+  const prevIdx = Math.max(0, idx - 1);
+  const nextIdx = Math.min(lastIdx, idx + 1);
+  const prev = state.centerPathPoints[prevIdx];
+  const next = state.centerPathPoints[nextIdx];
+  const tx = next.x - prev.x;
+  const ty = next.y - prev.y;
+  const tLen = Math.hypot(tx, ty) || 1;
+
+  return { point, tangent: { x: tx / tLen, y: ty / tLen } };
+}
+
 function getStageProgressRange(stageIndex) {
   const start = stageIndex === 0 ? 0 : phases[stageIndex - 1].threshold;
   const end = stageIndex < phases.length - 1 ? phases[stageIndex].threshold : 0.985;
@@ -268,7 +485,7 @@ function buildIntestineBorderPreviewPositions(entries) {
     const sideSign = i % 2 === 0 ? -1 : 1;
     const progressStep = pairCount > 1 ? pairIndex / (pairCount - 1) : 0.5;
     const progress = startProgress + progressStep * (endProgress - startProgress);
-    const { point, tangent } = getPointAndTangentAtProgress(progress);
+    const { point, tangent } = getCenterPointAndTangentAtProgress(progress);
 
     let x = point.x;
     let y = point.y;
@@ -347,10 +564,169 @@ function getEdgeAnchor() {
   return { x: travel, y: 1 - inset, rotation: Math.random() * 16 - 8 };
 }
 
+// ---------------------------------------------------------------------------
+// Canvas micro-item system — all rendering in JS, no DOM img elements
+// ---------------------------------------------------------------------------
+
+const imageCache = new Map();
+
+function loadMicroImage(src) {
+  if (imageCache.has(src)) return imageCache.get(src);
+  const img = new Image();
+  img.onload = () => drawMicroDecorations();
+  img.src = src;
+  imageCache.set(src, img);
+  return img;
+}
+
+function preloadMicroAssets() {
+  allMicroAssets.forEach(({ src }) => loadMicroImage(src));
+}
+
+function resizeMicroCanvas() {
+  const rect = board.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  microLayer.width = Math.round(rect.width * dpr);
+  microLayer.height = Math.round(rect.height * dpr);
+  microCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+// Returns true if all 4 rotated corners of the image land inside the safe mask.
+// halfW / halfH are in mask-pixel units.
+function areCornersSafe(ratioX, ratioY, halfW, halfH, rotDeg) {
+  if (!state.safeMask || !state.mapWidth || !state.mapHeight) return true;
+  const cx = ratioX * (state.mapWidth - 1);
+  const cy = ratioY * (state.mapHeight - 1);
+  const rad = rotDeg * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const corners = [[-halfW, -halfH], [halfW, -halfH], [halfW, halfH], [-halfW, halfH]];
+  for (const [ox, oy] of corners) {
+    const mx = Math.round(cx + ox * cos - oy * sin);
+    const my = Math.round(cy + ox * sin + oy * cos);
+    if (isMaskSafeAt(mx, my) !== true) return false;
+  }
+  return true;
+}
+
+// Tries rotating by increasing offsets until all corners fit inside the mask.
+function findSafeRotation(ratioX, ratioY, halfW, halfH, preferredRot) {
+  if (areCornersSafe(ratioX, ratioY, halfW, halfH, preferredRot)) return preferredRot;
+  const offsets = [45, -45, 90, -90, 135, -135, 180];
+  for (const offset of offsets) {
+    if (areCornersSafe(ratioX, ratioY, halfW, halfH, preferredRot + offset)) {
+      return preferredRot + offset;
+    }
+  }
+  return preferredRot;
+}
+
+// ---------------------------------------------------------------------------
+// Grow-on-reveal animation
+// ---------------------------------------------------------------------------
+
+function easeOutBack(t) {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
+let microAnimFrame = 0;
+
+function animateMicroDecorations(timestamp) {
+  const animDuration = 420;
+  let anyAnimating = false;
+
+  for (const dec of state.microDecorations) {
+    if (!dec.revealed || dec.animProgress >= 1) continue;
+    if (!dec.animStartTime) dec.animStartTime = timestamp;
+    dec.animProgress = Math.min(1, (timestamp - dec.animStartTime) / animDuration);
+    anyAnimating = true;
+  }
+
+  drawMicroDecorations();
+
+  if (anyAnimating) {
+    microAnimFrame = requestAnimationFrame(animateMicroDecorations);
+  } else {
+    microAnimFrame = 0;
+  }
+}
+
+function startMicroAnimation() {
+  if (!microAnimFrame) {
+    microAnimFrame = requestAnimationFrame(animateMicroDecorations);
+  }
+}
+
+function revealMicroDecorations(progress) {
+  let newReveals = false;
+  for (const dec of state.microDecorations) {
+    if (!dec.revealed && progress >= dec.trackProgress) {
+      dec.revealed = true;
+      dec.animStartTime = null;
+      dec.animProgress = 0;
+      dec.safeRotation = undefined; // force recompute at current display size
+      newReveals = true;
+    }
+  }
+  if (newReveals) startMicroAnimation();
+}
+
+// Draws all micro decorations onto the microLayer canvas.
+function drawMicroDecorations() {
+  const rect = board.getBoundingClientRect();
+  microCtx.clearRect(0, 0, rect.width, rect.height);
+
+  // Mirror CSS: clamp(22px, 3.4vw, 40px)
+  const baseSize = Math.max(22, Math.min(40, rect.width * 0.034));
+
+  for (const decoration of state.microDecorations) {
+    if (!decoration.revealed) continue;
+    const img = imageCache.get(decoration.src);
+    if (!img || !img.complete || !img.naturalWidth) continue;
+
+    // Compute and cache safeRotation once at full size so it never changes mid-animation
+    if (decoration.safeRotation === undefined) {
+      const fullW = baseSize * (decoration.scale || 1);
+      const fullH = (img.naturalHeight / img.naturalWidth) * fullW;
+      const halfWFull = (fullW / 2 / rect.width) * (state.mapWidth - 1);
+      const halfHFull = (fullH / 2 / rect.height) * (state.mapHeight - 1);
+      decoration.safeRotation = findSafeRotation(
+        decoration.x, decoration.y, halfWFull, halfHFull, decoration.rotation
+      );
+    }
+    const safeRot = decoration.safeRotation;
+
+    const animScale = easeOutBack(Math.max(0, decoration.animProgress || 0));
+    const w = baseSize * (decoration.scale || 1) * animScale;
+    const h = (img.naturalHeight / img.naturalWidth) * w;
+
+    // Use full-size half-dims for the clip guard (safeRot already based on full size)
+    const halfWMask = (baseSize * (decoration.scale || 1) / 2 / rect.width) * (state.mapWidth - 1);
+    const halfHMask = (baseSize * (decoration.scale || 1) * (img.naturalHeight / img.naturalWidth) / 2 / rect.height) * (state.mapHeight - 1);
+
+    // Skip items whose body still clips outside the mask after rotation adjustment
+    if (state.safeMask && !areCornersSafe(decoration.x, decoration.y, halfWMask, halfHMask, safeRot)) {
+      continue;
+    }
+
+    const cx = decoration.x * rect.width;
+    const cy = decoration.y * rect.height;
+    microCtx.save();
+    microCtx.translate(cx, cy);
+    microCtx.rotate(safeRot * Math.PI / 180);
+    microCtx.drawImage(img, -w / 2, -h / 2, w, h);
+    microCtx.restore();
+  }
+}
+
 function clearMicroDecorations() {
+  if (microAnimFrame) { cancelAnimationFrame(microAnimFrame); microAnimFrame = 0; }
   state.microDecorations = [];
   state.microNextSpawnProgress = stageMicroAssets.map((_, stageIndex) => getStageProgressRange(stageIndex).start);
-  microLayer.innerHTML = "";
+  const rect = board.getBoundingClientRect();
+  microCtx.clearRect(0, 0, rect.width, rect.height);
 }
 
 function renderAllMicroPreview() {
@@ -358,39 +734,36 @@ function renderAllMicroPreview() {
 
   const entries = buildPreviewEntries();
   const positions = buildIntestineBorderPreviewPositions(entries);
-  const stageScale = [1.12, 1.06, 1.18, 1.14, 1.14];
+  const stageScale = [1.12, 1.06, 0.72, 1.14, 1.14];
 
   for (let i = 0; i < entries.length; i += 1) {
     const micro = entries[i];
     const anchor = positions[i];
-    const element = document.createElement("img");
-
-    element.src = micro.src;
-    element.alt = "";
-    element.className = "micro-item";
 
     const tangentAngle = Math.atan2(anchor.tangent.y, anchor.tangent.x) * (180 / Math.PI);
-    const rotation = tangentAngle + ((i % 2 === 0 ? -1 : 1) * (4 + ((i + micro.stageIndex) % 3) * 2));
+    // For S3: align with path axis, normalised to [-90, 90] so items are never upside-down
+    const s3Rot = (() => { let a = tangentAngle % 180; if (a > 90) a -= 180; else if (a < -90) a += 180; return a; })();
+    const rotation = micro.stageIndex === 2
+      ? s3Rot
+      : tangentAngle + ((i % 2 === 0 ? -1 : 1) * (4 + ((i + micro.stageIndex) % 3) * 2));
     const scaleWave = 0.92 + ((i + micro.stageIndex) % 4) * 0.06;
     const scale = (stageScale[micro.stageIndex] || 1) * scaleWave;
-    const decoration = {
+
+    state.microDecorations.push({
+      src: micro.src,
       stageIndex: micro.stageIndex,
       x: anchor.x,
       y: anchor.y,
       scale,
       rotation,
-      element
-    };
-
-    microLayer.appendChild(element);
-    state.microDecorations.push(decoration);
-
-    element.style.left = `${anchor.x * 100}%`;
-    element.style.top = `${anchor.y * 100}%`;
-    element.style.transform = `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale})`;
+      trackProgress: 0,
+      revealed: false,
+      animProgress: 0,
+      animStartTime: null
+    });
   }
 
-  positionMicroDecorations();
+  drawMicroDecorations();
 }
 
 function spawnMicroDecoration(stageIndex) {
@@ -400,14 +773,25 @@ function spawnMicroDecoration(stageIndex) {
   }
 
   const spawnProgress = state.microNextSpawnProgress[stageIndex];
-  const { point, tangent } = getPointAndTangentAtProgress(spawnProgress);
+  const { point, tangent } = getCenterPointAndTangentAtProgress(spawnProgress);
   const tangentAngle = Math.atan2(tangent.y, tangent.x) * (180 / Math.PI);
-  const stageScale = [1.08, 1.02, 1.12, 1.08, 1.08];
+  const stageScale = [1.08, 1.02, 0.72, 1.08, 1.08];
   const laneOffsets = [0.042, 0.028];
-  const isMostlyHorizontal = Math.abs(tangent.x) >= Math.abs(tangent.y);
-  const sideVectors = isMostlyHorizontal
-    ? [{ x: 0, y: -1 }, { x: 0, y: 1 }]
-    : [{ x: -1, y: 0 }, { x: 1, y: 0 }];
+
+  // Estimate the item half-size in mask pixels so the bounds check
+  // guarantees the full item body fits inside the green mask, not just its centre.
+  const boardW = board.clientWidth || 600;
+  const estimatedBase = Math.max(22, Math.min(40, boardW * 0.034));
+  const maxItemScale = 1.12 * 1.09; // largest stageScale × largest scaleWave
+  const halfMaskEst = Math.round(
+    (estimatedBase * maxItemScale / 2 / boardW) * Math.max(state.mapWidth - 1, 1)
+  );
+
+  // True perpendicular to the path tangent — works correctly at curves and corners
+  const sideVectors = [
+    { x: -tangent.y, y: tangent.x },
+    { x: tangent.y, y: -tangent.x }
+  ];
 
   for (let sideIndex = 0; sideIndex < sideVectors.length; sideIndex += 1) {
     const side = sideVectors[sideIndex];
@@ -418,12 +802,22 @@ function spawnMicroDecoration(stageIndex) {
 
       let safePosition = null;
       const desiredOffset = laneOffsets[Math.min(bandIndex, laneOffsets.length - 1)];
-      const shrinkSteps = [1, 0.88, 0.76, 0.64, 0.52, 0.4, 0.28];
+      const shrinkSteps = [1, 0.85, 0.7, 0.55, 0.4, 0.25, 0.1, 0];
 
       for (const shrink of shrinkSteps) {
         const testX = Math.max(0, Math.min(1, point.x + nx * desiredOffset * shrink));
         const testY = Math.max(0, Math.min(1, point.y + ny * desiredOffset * shrink));
-        if (evaluateSafetyAtPosition(testX, testY, MICRO_SAFE_RADIUS_MULTIPLIER).safe) {
+        const cx = Math.round(testX * (state.mapWidth - 1));
+        const cy = Math.round(testY * (state.mapHeight - 1));
+        const h = halfMaskEst;
+        // Check centre + 4 cardinal points at estimated item half-size
+        if (
+          isMaskSafeAt(cx,     cy    ) === true &&
+          isMaskSafeAt(cx + h, cy    ) === true &&
+          isMaskSafeAt(cx - h, cy    ) === true &&
+          isMaskSafeAt(cx,     cy + h) === true &&
+          isMaskSafeAt(cx,     cy - h) === true
+        ) {
           safePosition = { x: testX, y: testY };
           break;
         }
@@ -433,49 +827,31 @@ function spawnMicroDecoration(stageIndex) {
         continue;
       }
 
-      safePosition = ensureSafeMicroPosition(
-        safePosition.x,
-        safePosition.y,
-        point.x,
-        point.y,
-        MICRO_SAFE_RADIUS_MULTIPLIER
-      );
-
-      if (!safePosition) {
-        continue;
-      }
-
       const assetIndex = state.microDecorations.length % assets.length;
-      const element = document.createElement("img");
-
-      element.src = assets[assetIndex];
-      element.alt = "";
-      element.className = "micro-item";
-
-      const rotation = tangentAngle + sideSign * (8 + bandIndex * 3);
+      // For S3: align with path axis, normalised to [-90, 90] so items are never upside-down
+      const s3Rot = (() => { let a = tangentAngle % 180; if (a > 90) a -= 180; else if (a < -90) a += 180; return a; })();
+      const rotation = stageIndex === 2
+        ? s3Rot
+        : tangentAngle + sideSign * (8 + bandIndex * 3);
       const scaleWave = 0.94 + (state.microDecorations.length % 3) * 0.05;
       const scale = (stageScale[stageIndex] || 1) * scaleWave;
 
-      const decoration = {
+      state.microDecorations.push({
+        src: assets[assetIndex],
         stageIndex,
         x: safePosition.x,
         y: safePosition.y,
-        anchorX: point.x,
-        anchorY: point.y,
-        safeRadiusMultiplier: MICRO_SAFE_RADIUS_MULTIPLIER,
         rotation,
         scale,
-        element
-      };
-
-      microLayer.appendChild(element);
-      state.microDecorations.push(decoration);
-
-      element.style.left = `${safePosition.x * 100}%`;
-      element.style.top = `${safePosition.y * 100}%`;
-      element.style.transform = `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale})`;
+        trackProgress: spawnProgress,
+        revealed: false,
+        animProgress: 0,
+        animStartTime: null
+      });
     }
   }
+
+  drawMicroDecorations();
 }
 
 function syncMicroSpawns(progress) {
@@ -491,7 +867,10 @@ function syncMicroSpawns(progress) {
       state.microNextSpawnProgress[stageIndex] = range.start;
     }
 
-    const spawnStep = Math.max(0.012, (range.end - range.start) / Math.max(3, assets.length * 3));
+    const spawnStep = Math.max(
+      0.008,
+      (range.end - range.start) / Math.max(3, assets.length * [3, 3, 7, 3, 3][stageIndex])
+    );
 
     while (progress >= state.microNextSpawnProgress[stageIndex] && state.microNextSpawnProgress[stageIndex] < range.end) {
       spawnMicroDecoration(stageIndex);
@@ -518,40 +897,7 @@ function ensureSafeMicroPosition(x, y, anchorX, anchorY, radiusMultiplier = MICR
 }
 
 function positionMicroDecorations() {
-  const edgePadding = 18 / Math.max(1, Math.min(board.clientWidth, board.clientHeight));
-
-  for (const decoration of state.microDecorations) {
-    const padding = 0.5 / Math.max(1, Math.min(board.clientWidth, board.clientHeight));
-    const clampedX = Math.max(padding, Math.min(1 - padding, decoration.x));
-    const clampedY = Math.max(padding, Math.min(1 - padding, decoration.y));
-    const constrained = ensureSafeMicroPosition(
-      clampedX,
-      clampedY,
-      decoration.anchorX ?? clampedX,
-      decoration.anchorY ?? clampedY,
-      decoration.safeRadiusMultiplier ?? MICRO_SAFE_RADIUS_MULTIPLIER
-    );
-
-    if (!constrained) {
-      decoration.element.style.display = "none";
-      continue;
-    }
-
-    decoration.element.style.display = "block";
-
-    decoration.x = constrained.x;
-    decoration.y = constrained.y;
-
-    decoration.element.style.left = `${decoration.x * 100}%`;
-    decoration.element.style.top = `${decoration.y * 100}%`;
-    decoration.element.style.transform = `translate(-50%, -50%) rotate(${decoration.rotation}deg) scale(${decoration.scale || 1})`;
-
-    if (decoration.x < edgePadding || decoration.x > 1 - edgePadding || decoration.y < edgePadding || decoration.y > 1 - edgePadding) {
-      decoration.element.style.opacity = "0.85";
-    } else {
-      decoration.element.style.opacity = "1";
-    }
-  }
+  drawMicroDecorations();
 }
 
 function closestPointProgress(point, boardWidth, boardHeight) {
@@ -860,7 +1206,7 @@ function movePlayer(ratioX, ratioY) {
   const phaseIndex = getPhaseIndex(state.progress);
   appendTrailPoint(clampedX, clampedY, phaseIndex);
   checkPhaseUnlock(state.progress);
-  syncMicroSpawns(state.progress);
+  revealMicroDecorations(state.progress);
   state.activePhaseIndex = getPhaseIndex(state.progress);
 
   if (state.progress >= 0.985) {
@@ -882,6 +1228,7 @@ function resetGame() {
   clearTrail();
   appendTrailPoint(trackPoints[0].x, trackPoints[0].y, 0);
   clearMicroDecorations();
+  syncMicroSpawns(1.0);
   startTag.classList.remove("hidden");
 }
 
@@ -937,21 +1284,28 @@ restartBtn.addEventListener("click", resetGame);
 
 window.addEventListener("resize", () => {
   resizeTrailCanvas();
+  resizeMicroCanvas();
   drawTrail();
-  positionMicroDecorations();
+  drawMicroDecorations();
 });
 
 mapImg.addEventListener("load", () => {
   resizeTrailCanvas();
+  resizeMicroCanvas();
+  preloadMicroAssets();
   buildSafeMask();
   buildTrackMetrics();
+  buildCenterPathPoints();
   resetGame();
 });
 
 buildTrackMetrics();
 if (mapImg.complete) {
   resizeTrailCanvas();
+  resizeMicroCanvas();
+  preloadMicroAssets();
   buildSafeMask();
   buildTrackMetrics();
+  buildCenterPathPoints();
   resetGame();
 }
