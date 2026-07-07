@@ -43,6 +43,7 @@ const dialogText = document.getElementById("dialogText");
 const restartBtn = document.getElementById("restartBtn");
 const startTag = document.getElementById("startTag");
 const phaseToast = document.getElementById("phaseToast");
+const errorVignette = document.getElementById("errorVignette");
 const stageCards = [
   document.getElementById("stageCard1"),
   document.getElementById("stageCard2"),
@@ -1558,11 +1559,26 @@ function showBorderWarning() {
   state.warningActive = true;
   state.dragging = false;
   kibble.classList.remove("dragging");
+
+  // Kibble shake
   kibble.classList.remove("shake");
-  void kibble.offsetWidth; // force reflow to restart animation
+  void kibble.offsetWidth;
   kibble.classList.add("shake");
+
+  // Red vignette flash
+  errorVignette.classList.remove("flash");
+  void errorVignette.offsetWidth;
+  errorVignette.classList.add("flash");
+
+  // Board shake
+  board.classList.remove("screen-shake");
+  void board.offsetWidth;
+  board.classList.add("screen-shake");
+
   kibble.addEventListener("animationend", () => {
     kibble.classList.remove("shake");
+    board.classList.remove("screen-shake");
+    errorVignette.classList.remove("flash");
     state.warningActive = false;
   }, { once: true });
 }
