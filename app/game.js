@@ -30,6 +30,9 @@ const timerFillEl = document.getElementById("timerFill");
 const landingScreen = document.getElementById("landingScreen");
 const guideScreen = document.getElementById("guideScreen");
 const endScreen = document.getElementById("endScreen");
+const landingBtn = document.getElementById("landingBtn");
+const guideBtn = document.getElementById("guideBtn");
+const endBtn = document.getElementById("endBtn");
 const countdownOverlay = document.getElementById("countdownOverlay");
 const countdownText = document.getElementById("countdownText");
 const overlay = document.getElementById("overlay");
@@ -1623,9 +1626,17 @@ restartBtn.addEventListener("click", () => {
     return;
   }
   resetGame();
+  if (state.appPhase === APP_PHASE.GAME) {
+    startGameStartCountdown();
+  }
 });
 
 landingScreen.addEventListener("click", () => {
+  unlockAudioIfNeeded();
+  showGuidePhase();
+});
+landingBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
   unlockAudioIfNeeded();
   showGuidePhase();
 });
@@ -1633,7 +1644,17 @@ guideScreen.addEventListener("click", () => {
   unlockAudioIfNeeded();
   startGamePhaseFromGuide();
 });
+guideBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  unlockAudioIfNeeded();
+  startGamePhaseFromGuide();
+});
 endScreen.addEventListener("click", () => {
+  unlockAudioIfNeeded();
+  showLandingPhase();
+});
+endBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
   unlockAudioIfNeeded();
   showLandingPhase();
 });

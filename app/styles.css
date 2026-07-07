@@ -68,7 +68,7 @@ body {
 
 .timer-label {
   color: #f3f4f6;
-  font-size: clamp(0.78rem, 1.9vw, 1.26rem);
+  font-size: clamp(1.56rem, 3.8vw, 2.52rem);
   font-family: Futura, "Futura PT", "Trebuchet MS", sans-serif;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -95,7 +95,7 @@ body {
 
 #timer {
   color: #f3f4f6;
-  font-size: clamp(0.84rem, 2vw, 1.3rem);
+  font-size: clamp(1.68rem, 4vw, 2.6rem);
   font-family: Futura, "Futura PT", "Trebuchet MS", sans-serif;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -169,7 +169,7 @@ body {
   transform: translate(-50%, -50%);
   cursor: grab;
   user-select: none;
-  z-index: 5;
+  z-index: 7;
 }
 
 .kibble.dragging {
@@ -185,12 +185,14 @@ body {
   width: clamp(132px, 24vw, 260px);
   z-index: 6;
   box-shadow: none;
+  pointer-events: none;
 }
 
 .stage-card-image {
   display: block;
   width: 150%;
   height: auto;
+  pointer-events: none;
 }
 
 .stage-card.green { left: 52%; top: 11%; }
@@ -228,6 +230,38 @@ body {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.phase-action-button {
+  position: absolute;
+  left: 50%;
+  bottom: clamp(80px, 22vh, 220px);
+  transform: translateX(-50%);
+  padding: 36px 72px;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #f6d7b2 0%, #eab57d 100%);
+  color: #1f1207;
+  font-family: Futura, "Futura PT", "Trebuchet MS", sans-serif;
+  font-size: clamp(2.24rem, 6vw, 2.9rem);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  z-index: 46;
+  box-shadow: 0 10px 24px rgba(17, 24, 39, 0.24);
+}
+
+.phase-action-button:hover,
+.phase-action-button:focus-visible {
+  outline: none;
+  transform: translateX(-50%) translateY(-2px);
+  box-shadow: 0 14px 28px rgba(17, 24, 39, 0.28);
+}
+
+.phase-action-button:active {
+  transform: translateX(-50%) translateY(0);
+  box-shadow: 0 8px 18px rgba(17, 24, 39, 0.22);
 }
 
 .countdown-overlay {
@@ -304,10 +338,10 @@ body {
   border: none;
   background: var(--accent);
   color: #fff;
-  font-size: 0.95rem;
+  font-size: 1.9rem;
   font-weight: 700;
-  border-radius: 10px;
-  padding: 10px 16px;
+  border-radius: 20px;
+  padding: 20px 32px;
   cursor: pointer;
 }
 
@@ -351,6 +385,14 @@ body {
     margin-top: 4px;
   }
 
+  .timer-label {
+    font-size: clamp(1.4rem, 4.2vw, 2rem);
+  }
+
+  #timer {
+    font-size: clamp(1.5rem, 4.6vw, 2.2rem);
+  }
+
   .countdown-label {
     font-size: clamp(38px, 10vw, 54px);
   }
@@ -364,5 +406,17 @@ body {
     max-width: 86vw;
     text-overflow: ellipsis;
     overflow: hidden;
+  }
+
+  .phase-action-button {
+    bottom: clamp(54px, 14vh, 140px);
+    padding: 28px 52px;
+    font-size: clamp(2rem, 6.6vw, 2.44rem);
+    font-weight: 900;
+  }
+
+  #restartBtn {
+    font-size: 1.5rem;
+    padding: 16px 24px;
   }
 }
