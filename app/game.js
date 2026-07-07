@@ -30,9 +30,11 @@ const timerFillEl = document.getElementById("timerFill");
 const landingScreen = document.getElementById("landingScreen");
 const guideScreen = document.getElementById("guideScreen");
 const endScreen = document.getElementById("endScreen");
+const againScreen = document.getElementById("againScreen");
 const landingBtn = document.getElementById("landingBtn");
 const guideBtn = document.getElementById("guideBtn");
 const endBtn = document.getElementById("endBtn");
+const againBtn = document.getElementById("againBtn");
 const countdownOverlay = document.getElementById("countdownOverlay");
 const countdownText = document.getElementById("countdownText");
 const overlay = document.getElementById("overlay");
@@ -41,6 +43,13 @@ const dialogText = document.getElementById("dialogText");
 const restartBtn = document.getElementById("restartBtn");
 const startTag = document.getElementById("startTag");
 const phaseToast = document.getElementById("phaseToast");
+const stageCards = [
+  document.getElementById("stageCard1"),
+  document.getElementById("stageCard2"),
+  document.getElementById("stageCard3"),
+  document.getElementById("stageCard4"),
+  document.getElementById("stageCard5")
+];
 const stageCardImages = [
   document.getElementById("stageCardImg1"),
   document.getElementById("stageCardImg2"),
@@ -131,6 +140,7 @@ const state = {
   dragging: false,
   ended: false,
   warningActive: false,
+  onPath: false,
   appPhase: APP_PHASE.LANDING,
   controlsEnabled: false,
   countdownIntervalId: 0,
@@ -277,6 +287,7 @@ function hidePhaseScreens() {
   landingScreen.classList.add("hidden");
   guideScreen.classList.add("hidden");
   endScreen.classList.add("hidden");
+  againScreen.classList.add("hidden");
 }
 
 function clearGameStartCountdown() {
@@ -319,6 +330,16 @@ function showEndPhase() {
   overlay.classList.add("hidden");
   hidePhaseScreens();
   endScreen.classList.remove("hidden");
+  setBackgroundAudio("phase");
+}
+
+function showAgainPhase() {
+  clearGameStartCountdown();
+  state.appPhase = APP_PHASE.END;
+  state.controlsEnabled = false;
+  overlay.classList.add("hidden");
+  hidePhaseScreens();
+  againScreen.classList.remove("hidden");
   setBackgroundAudio("phase");
 }
 
@@ -1388,6 +1409,66 @@ function getPhaseIndex(progress) {
   return phases.length - 1;
 }
 
+function triggerCardConfetti(cardIndex) {
+  const img = stageCardImages[cardIndex];
+  const imgRect = img.getBoundingClientRect();
+  const boardRect = board.getBoundingClientRect();
+
+  const canvas = document.createElement("canvas");
+  canvas.style.cssText = "position:absolute;pointer-events:none;z-index:20;";
+  canvas.style.left = (imgRect.left - boardRect.left) + "px";
+  canvas.style.top = (imgRect.top - boardRect.top) + "px";
+  canvas.width = Math.round(imgRect.width);
+  canvas.height = Math.round(imgRect.height);
+  canvas.style.width = imgRect.width + "px";
+  canvas.style.height = imgRect.height + "px";
+  board.appendChild(canvas);
+
+  const ctx = canvas.getContext("2d");
+  const colors = ["#ff6b6b", "#ffd93d", "#6bcb77", "#4d96ff", "#f694c1", "#ff9a3c", "#ffffff"];
+  const w = canvas.width;
+  const h = canvas.height;
+
+  const particles = Array.from({ length: 55 }, () => ({
+    x: Math.random() * w,
+    y: -Math.random() * h * 0.25,
+    vx: (Math.random() - 0.5) * 4,
+    vy: Math.random() * 2.5 + 1.5,
+    color: colors[Math.floor(Math.random() * colors.length)],
+    w: Math.random() * 7 + 4,
+    h: Math.random() * 4 + 2,
+    rot: Math.random() * Math.PI * 2,
+    rotV: (Math.random() - 0.5) * 0.18
+  }));
+
+  const start = performance.now();
+  const DURATION = 1800;
+
+  function animateConfetti(now) {
+    const elapsed = now - start;
+    if (elapsed > DURATION) { canvas.remove(); return; }
+    ctx.clearRect(0, 0, w, h);
+    const fade = elapsed < DURATION * 0.55 ? 1 : Math.max(0, 1 - (elapsed - DURATION * 0.55) / (DURATION * 0.45));
+    for (const p of particles) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.06;
+      p.rot += p.rotV;
+      if (p.x < -p.w) p.x = w + p.w;
+      if (p.x > w + p.w) p.x = -p.w;
+      ctx.save();
+      ctx.globalAlpha = fade;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.restore();
+    }
+    requestAnimationFrame(animateConfetti);
+  }
+  requestAnimationFrame(animateConfetti);
+}
+
 function showPhaseToast(phaseIndex) {
   const phase = phases[phaseIndex];
   phaseToast.textContent = phase.label;
@@ -1405,6 +1486,7 @@ function checkPhaseUnlock(progress) {
     if (!phases[i].shown && i <= activePhaseIndex) {
       phases[i].shown = true;
       stageCardImages[i].src = stageCardImageAssets[i].fill;
+      triggerCardConfetti(i);
       if (i === activePhaseIndex) {
         playPhaseChangeCue(i);
         showPhaseToast(i);
@@ -1465,13 +1547,7 @@ function endGame(won, title, message) {
     return;
   }
 
-  dialogTitle.textContent = won ? "You Win!" : title;
-  dialogText.textContent = won
-    ? `Completed with ${Math.max(0, Math.ceil(state.secondsLeft))}s left.`
-    : message;
-  restartBtn.textContent = "Play Again";
-
-  overlay.classList.remove("hidden");
+  showAgainPhase();
 }
 
 function showBorderWarning() {
@@ -1482,11 +1558,13 @@ function showBorderWarning() {
   state.warningActive = true;
   state.dragging = false;
   kibble.classList.remove("dragging");
-
-  dialogTitle.textContent = "Careful";
-  dialogText.textContent = "Follow the line, avoid touching the side wall, and continue the game.";
-  restartBtn.textContent = "Continue";
-  overlay.classList.remove("hidden");
+  kibble.classList.remove("shake");
+  void kibble.offsetWidth; // force reflow to restart animation
+  kibble.classList.add("shake");
+  kibble.addEventListener("animationend", () => {
+    kibble.classList.remove("shake");
+    state.warningActive = false;
+  }, { once: true });
 }
 
 function movePlayer(ratioX, ratioY) {
@@ -1528,9 +1606,13 @@ function movePlayer(ratioX, ratioY) {
   const status = isSafePosition(clampedX, clampedY);
 
   if (!status.safe) {
-    showBorderWarning();
+    if (state.playing && state.onPath) {
+      showBorderWarning();
+    }
     return;
   }
+
+  state.onPath = true;
 
   setPlayerPosition(clampedX, clampedY);
   state.progress = Math.max(state.progress, status.progress);
@@ -1557,10 +1639,12 @@ function resetGame() {
   state.secondsLeft = GAME_TIME_SECONDS;
   state.progress = 0;
   state.activePhaseIndex = 0;
+  state.onPath = false;
   restartBtn.textContent = "Play Again";
   updateTimerUI(state.secondsLeft);
   resetPhases();
-  setPlayerPosition(trackPoints[0].x, trackPoints[0].y);
+  const boardH = board.offsetHeight || 1;
+  setPlayerPosition(trackPoints[0].x, 0.10);
   clearTrail();
   appendTrailPoint(trackPoints[0].x, trackPoints[0].y, 0);
   clearMicroDecorations();
@@ -1655,6 +1739,15 @@ endScreen.addEventListener("click", () => {
 });
 endBtn.addEventListener("click", (event) => {
   event.stopPropagation();
+  unlockAudioIfNeeded();
+  showLandingPhase();
+});
+againBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  unlockAudioIfNeeded();
+  showLandingPhase();
+});
+againScreen.addEventListener("click", () => {
   unlockAudioIfNeeded();
   showLandingPhase();
 });
